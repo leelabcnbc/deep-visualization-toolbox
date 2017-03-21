@@ -1,10 +1,9 @@
 #! /usr/bin/env python
 
 import argparse
-import ipdb as pdb
 import cPickle as pickle
 
-from loaders import load_imagenet_mean, load_labels, caffe
+from loaders import load_imagenet_mean, caffe
 from jby_misc import WithTimer
 from max_tracker import output_max_patches
 
