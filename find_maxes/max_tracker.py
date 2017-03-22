@@ -177,12 +177,13 @@ def get_max_data_extent(net, layer, rc, is_conv):
         return net.blobs['data'].data.shape[2:4]  # e.g. (227,227) for fc6,fc7,fc8,prop
 
 
-def output_max_patches(max_tracker, net, layer, idx_begin, idx_end, num_top, datadir, filelist, outdir, do_which):
+def output_max_patches(max_tracker, net, layer, idx_begin, idx_end, num_top, datadir, filelist, outdir, do_which,
+                       layer_info):
     do_maxes, do_deconv, do_deconv_norm, do_backprop, do_backprop_norm, do_info = do_which
     assert do_maxes or do_deconv or do_deconv_norm or do_backprop or do_backprop_norm or do_info, 'nothing to do'
 
     mt = max_tracker
-    rc = RegionComputer()
+    rc = RegionComputer(layer_info)
 
     image_filenames, image_labels = load_file_list(filelist)
     print 'Loaded filenames and labels for %d files' % len(image_filenames)
