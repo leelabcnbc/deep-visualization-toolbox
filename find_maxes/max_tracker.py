@@ -166,11 +166,23 @@ def save_representations(net, datadir, filelist, layer, first_N=None):
 
 def get_max_data_extent(net, layer, rc, is_conv):
     '''Gets the maximum size of the data layer that can influence a unit on layer.'''
+    reference_shape = net.blobs['data'].data.shape[2:4]  # e.g. (227,227) for fc6,fc7,fc8,prop
+    assert len(reference_shape) == 2
     if is_conv:
         conv_size = net.blobs[layer].data.shape[2:4]  # e.g. (13,13) for conv5
         layer_slice_middle = (conv_size[0] / 2, conv_size[0] / 2 + 1, conv_size[1] / 2,
                               conv_size[1] / 2 + 1)  # e.g. (6,7,6,7,), the single center unit
-        data_slice = rc.convert_region(layer, 'data', layer_slice_middle)
+        data_slice = rc.convert_region(layer, 'data', layer_slice_middle, normalize_last=True)
+
+        # I think this part will break for VGG-16/19, where first layer has padding.
+        assert data_slice[1] <= reference_shape[0]
+        assert data_slice[0] >= 0
+        assert data_slice[0] < data_slice[1]
+
+        assert data_slice[3] <= reference_shape[1]
+        assert data_slice[2] >= 0
+        assert data_slice[2] < data_slice[3]
+
         return data_slice[1] - data_slice[0], data_slice[3] - data_slice[2]  # e.g. (163, 163) for conv5
     else:
         # Whole data region
@@ -196,6 +208,9 @@ def output_max_patches(max_tracker, net, layer, idx_begin, idx_end, num_top, dat
 
     size_ii, size_jj = get_max_data_extent(net, layer, rc, mt.is_conv)
     data_size_ii, data_size_jj = net.blobs['data'].data.shape[2:4]
+
+    assert 0 < size_ii <= data_size_ii
+    assert 0 < size_jj <= data_size_jj
 
     n_total_images = (idx_end - idx_begin) * num_top
     for cc, channel_idx in enumerate(range(idx_begin, idx_end)):
@@ -223,16 +238,25 @@ def output_max_patches(max_tracker, net, layer, idx_begin, idx_end, num_top, dat
             if mt.is_conv:
                 # Compute the focus area of the data layer
                 layer_indices = (ii, ii + 1, jj, jj + 1)
-                data_indices = rc.convert_region(layer, 'data', layer_indices)
+                data_indices = rc.convert_region(layer, 'data', layer_indices, normalize_last=True)
                 data_ii_start, data_ii_end, data_jj_start, data_jj_end = data_indices
 
-                touching_imin = (data_ii_start == 0)
-                touching_jmin = (data_jj_start == 0)
+                # why == 0. I think it's also possible for it to be < 0
+                # if we have padding in the first layer. such as VGG-16/19.
+                touching_imin = (data_ii_start <= 0)
+                touching_jmin = (data_jj_start <= 0)
 
                 # Compute how much of the data slice falls outside the actual data [0,max] range
                 ii_outside = size_ii - (data_ii_end - data_ii_start)  # possibly 0
                 jj_outside = size_jj - (data_jj_end - data_jj_start)  # possibly 0
-
+                # this should be true, since usually, the central unit (with extent size_ii, size_jj)
+                # should cover larger or equal region compared to all others, since there's less effect of padding.
+                assert ii_outside >= 0 and jj_outside >= 0
+                # if ii_outside (or jj_outside) is > 0,
+                # then that means more data got chopped off due to padding.
+                # if touching_imin, that means the chopping is due to close to left side
+                # if touching_jmin, chopping due to close to top.
+                # so we should pad those data there.
                 if touching_imin:
                     out_ii_start = ii_outside
                     out_ii_end = size_ii
@@ -289,6 +313,7 @@ def output_max_patches(max_tracker, net, layer, idx_begin, idx_end, num_top, dat
                 if len(diffs.shape) == 4:
                     diffs[0, channel_idx, ii, jj] = 1.0
                 else:
+                    assert len(diffs.shape) == 2
                     diffs[0, channel_idx] = 1.0
                 with WithTimer('Deconv    ', quiet=not do_print):
                     net.deconv_from_layer(layer, diffs)
@@ -310,7 +335,12 @@ def output_max_patches(max_tracker, net, layer, idx_begin, idx_end, num_top, dat
 
             if do_backprop or do_backprop_norm:
                 diffs = net.blobs[layer].diff * 0
-                diffs[0, channel_idx, ii, jj] = 1.0
+                if len(diffs.shape) == 4:
+                    diffs[0, channel_idx, ii, jj] = 1.0
+                else:
+                    assert len(diffs.shape) == 2
+                    diffs[0, channel_idx] = 1.0
+
                 with WithTimer('Backward  ', quiet=not do_print):
                     net.backward_from_layer(layer, diffs)
 

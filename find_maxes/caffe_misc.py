@@ -25,7 +25,7 @@ def shownet(net):
         print '(%g, %g)' % (v.diff.min(), v.diff.max())
 
 
-def region_converter(top_slice, bot_size, top_size, filter_width=(1, 1), stride=(1, 1), pad=(0, 0)):
+def region_converter(top_slice, bot_size, top_size, filter_width=(1, 1), stride=(1, 1), pad=(0, 0), norm_last=False):
     '''
     Works for conv or pool
     
@@ -56,6 +56,10 @@ vector<int> ConvolutionLayer<Dtype>::JBY_region_of_influence(const vector<int>& 
     # Crop top slice to allowable region
     top_slice = [ss for ss in top_slice]  # Copy list or array -> list
 
+    # top slice[1], topslice[3] are 1 plus the actual index.
+    assert top_slice[0] < top_slice[1]
+    assert top_slice[2] < top_slice[3]
+
     top_slice[0] = max(0, min(top_size[0], top_slice[0]))
     top_slice[1] = max(0, min(top_size[0], top_slice[1]))
     top_slice[2] = max(0, min(top_size[1], top_slice[2]))
@@ -68,15 +72,29 @@ vector<int> ConvolutionLayer<Dtype>::JBY_region_of_influence(const vector<int>& 
     bot_slice[2] = top_slice[2] * stride[1] - pad[1];
     bot_slice[3] = (top_slice[3] - 1) * stride[1] + filter_width[1] - pad[1];
 
+    # I think you should normalize the bottom size as well, sometimes. Otherwise, if there's padding on bottom slice,
+    # and this is the last one. then there's no way it will get normalized.
+
+    if norm_last:
+        bot_slice[0] = max(0, min(bot_size[0], bot_slice[0]))
+        bot_slice[1] = max(0, min(bot_size[0], bot_slice[1]))
+        bot_slice[2] = max(0, min(bot_size[1], bot_slice[2]))
+        bot_slice[3] = max(0, min(bot_size[1], bot_slice[3]))
+
+    assert bot_slice[0] < bot_slice[1]
+    assert bot_slice[2] < bot_slice[3]
+
     return bot_slice
 
 
 def get_conv_converter(bot_size, top_size, filter_width=(1, 1), stride=(1, 1), pad=(0, 0)):
-    return lambda top_slice: region_converter(top_slice, bot_size, top_size, filter_width, stride, pad)
+    return lambda top_slice, norm_last: region_converter(top_slice, bot_size, top_size, filter_width, stride, pad,
+                                                         norm_last)
 
 
 def get_pool_converter(bot_size, top_size, filter_width=(1, 1), stride=(1, 1), pad=(0, 0)):
-    return lambda top_slice: region_converter(top_slice, bot_size, top_size, filter_width, stride, pad)
+    return lambda top_slice, norm_last: region_converter(top_slice, bot_size, top_size, filter_width, stride, pad,
+                                                         norm_last)
 
 
 converter_this_mapping = {'conv': get_conv_converter, 'pool': get_pool_converter}
@@ -160,7 +178,7 @@ class RegionComputer(object):
             if layer in names:
                 return self.names_array[idx], self.converters_array[idx]
 
-    def convert_region(self, from_layer, to_layer, region, verbose=False):
+    def convert_region(self, from_layer, to_layer, region, verbose=False, normalize_last=False):
         '''region is the slice of the from_layer in the following Python
             index format: (ii_start, ii_end, jj_start, jj_end)
         '''
@@ -177,7 +195,7 @@ class RegionComputer(object):
             converter = converters[ii]
             if verbose:
                 print 'pushing', names[ii], 'region', ret, 'through converter'
-            ret = converter(ret)
+            ret = converter(ret, normalize_last)
         if verbose:
             print 'Final region at ', names[to_idx], 'is', ret
 
